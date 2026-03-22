@@ -13,6 +13,7 @@ import BookLeafIcon from '../../../UI/CustomSvgIcons/BookLeaf';
 import StoreIcon from '../../../UI/CustomSvgIcons/Store';
 import Preferences from '../../../UI/CustomSvgIcons/Preferences';
 import GDevelopGLogo from '../../../UI/CustomSvgIcons/GDevelopGLogo';
+import HelpIcon from '@material-ui/icons/Help';
 import GDevelopThemeContext from '../../../UI/Theme/GDevelopThemeContext';
 import HomePageMenuBar from './HomePageMenuBar';
 import {
@@ -42,7 +43,13 @@ export const styles = {
   },
 };
 
-export type HomeTab = 'create' | 'learn' | 'play' | 'shop' | 'team-view';
+export type HomeTab =
+  | 'create'
+  | 'learn'
+  | 'play'
+  | 'shop'
+  | 'api-settings'
+  | 'team-view';
 
 export type GetIconFunction = ({
   color: string,
@@ -71,6 +78,14 @@ const homePageMenuTabs: { [tab: HomeTab]: HomePageMenuTab } = {
     id: 'home-shop-tab',
     getIcon: ({ color, fontSize }) => (
       <StoreIcon fontSize={fontSize} color={color} />
+    ),
+  },
+  'api-settings': {
+    label: <Trans>API Settings</Trans>,
+    tab: 'api-settings',
+    id: 'home-api-settings-tab',
+    getIcon: ({ color, fontSize }) => (
+      <HelpIcon fontSize={fontSize} style={{ color }} />
     ),
   },
   learn: {
@@ -124,6 +139,7 @@ export const getTabsToDisplay = ({
     'create',
     displayPlayTab ? 'play' : null,
     displayShopTab ? 'shop' : null,
+    'api-settings',
     displayTeachTab ? 'team-view' : null,
   ].filter(Boolean);
   return tabs.map(tab => homePageMenuTabs[tab]);

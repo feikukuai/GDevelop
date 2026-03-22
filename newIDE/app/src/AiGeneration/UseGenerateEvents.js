@@ -7,6 +7,7 @@ import {
   getAiGeneratedEvent,
   createAiGeneratedEvent,
 } from '../Utils/GDevelopServices/Generation';
+import { getCustomAiApiConfig } from '../Utils/GDevelopServices/ApiConfigs';
 
 import { type EventsGenerationResult } from '../EditorFunctions';
 import { makeSimplifiedProjectBuilder } from '../EditorFunctions/SimplifiedProject/SimplifiedProject';
@@ -56,7 +57,11 @@ export const useGenerateEvents = ({
       relatedAiRequestId: string,
     |}): Promise<EventsGenerationResult> => {
       if (!project) throw new Error('No project is opened.');
-      if (!profile) throw new Error('User should be authenticated.');
+      const customConfig = getCustomAiApiConfig();
+      if (!customConfig.enabled && !profile) {
+        throw new Error('User should be authenticated.');
+      }
+      const userId = profile ? profile.id : 'custom-user';
 
       const simplifiedProjectBuilder = makeSimplifiedProjectBuilder(gd);
       const simplifiedProjectJson = JSON.stringify(
@@ -68,7 +73,7 @@ export const useGenerateEvents = ({
 
       const preparedAiUserContent = await prepareAiUserContent({
         getAuthorizationHeader,
-        userId: profile.id,
+        userId,
         simplifiedProjectJson,
         projectSpecificExtensionsSummaryJson,
         eventsJson: existingEventsJson,
@@ -76,7 +81,7 @@ export const useGenerateEvents = ({
 
       const createResult = await retryIfFailed({ times: 2 }, () =>
         createAiGeneratedEvent(getAuthorizationHeader, {
-          userId: profile.id,
+          userId,
           gameProjectJsonUserRelativeKey:
             preparedAiUserContent.gameProjectJsonUserRelativeKey,
           gameProjectJson: preparedAiUserContent.gameProjectJson,
@@ -112,7 +117,7 @@ export const useGenerateEvents = ({
 
         try {
           aiGeneratedEvent = await getAiGeneratedEvent(getAuthorizationHeader, {
-            userId: profile.id,
+            userId,
             aiGeneratedEventId: aiGeneratedEvent.id,
           });
         } catch (error) {

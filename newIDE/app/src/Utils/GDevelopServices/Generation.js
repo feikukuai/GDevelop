@@ -1,6 +1,10 @@
 // @flow
 import axios from 'axios';
-import { GDevelopAiCdn, GDevelopGenerationApi } from './ApiConfigs';
+import {
+  GDevelopAiCdn,
+  GDevelopGenerationApi,
+  getCustomAiApiConfig,
+} from './ApiConfigs';
 import { type MessageByLocale } from '../i18n/MessageByLocale';
 import { getIDEVersionWithHash } from '../../Version';
 import { extractNextPageUriFromLinkHeader } from './Play';
@@ -242,9 +246,27 @@ export type ResourceSearch = {
 };
 
 // $FlowFixMe[cannot-resolve-name]
-export const apiClient: Axios = axios.create({
-  baseURL: GDevelopGenerationApi.baseUrl,
-});
+export const getApiClient = (): Axios => {
+  const customConfig = getCustomAiApiConfig();
+  if (customConfig.enabled && customConfig.baseUrl) {
+    return axios.create({
+      baseURL: customConfig.baseUrl,
+      headers: customConfig.apiKey
+        ? {
+            Authorization: `Bearer ${customConfig.apiKey}`,
+            'Content-Type': 'application/json',
+          }
+        : {
+            'Content-Type': 'application/json',
+          },
+    });
+  }
+  return axios.create({
+    baseURL: GDevelopGenerationApi.baseUrl,
+  });
+};
+
+export const apiClient: Axios = getApiClient();
 
 export const getAiRequest = async (
   getAuthorizationHeader: () => Promise<string>,
@@ -256,19 +278,22 @@ export const getAiRequest = async (
     aiRequestId: string,
   |}
 ): Promise<AiRequest> => {
-  const authorizationHeader = await getAuthorizationHeader();
+  const client = getApiClient();
+  const customConfig = getCustomAiApiConfig();
+  const authorizationHeader = customConfig.enabled
+    ? ''
+    : await getAuthorizationHeader();
   // $FlowFixMe[underconstrained-implicit-instantiation]
-  const response = await axios.get(
-    `${GDevelopGenerationApi.baseUrl}/ai-request/${aiRequestId}`,
-    {
-      params: {
-        userId,
-      },
-      headers: {
-        Authorization: authorizationHeader,
-      },
-    }
-  );
+  const response = await client.get(`/ai-request/${aiRequestId}`, {
+    params: {
+      userId,
+    },
+    headers: customConfig.enabled
+      ? {}
+      : {
+          Authorization: authorizationHeader,
+        },
+  });
   return ensureObjectHasProperty({
     data: response.data,
     propertyName: 'id',
@@ -384,8 +409,12 @@ export const createAiRequest = async (
     toolsVersion: string,
   |}
 ): Promise<AiRequest> => {
-  const authorizationHeader = await getAuthorizationHeader();
-  const response = await apiClient.post(
+  const client = getApiClient();
+  const customConfig = getCustomAiApiConfig();
+  const authorizationHeader = customConfig.enabled
+    ? ''
+    : await getAuthorizationHeader();
+  const response = await client.post(
     '/ai-request',
     {
       gdevelopVersionWithHash: getIDEVersionWithHash(),
@@ -408,9 +437,11 @@ export const createAiRequest = async (
       params: {
         userId,
       },
-      headers: {
-        Authorization: authorizationHeader,
-      },
+      headers: customConfig.enabled
+        ? {}
+        : {
+            Authorization: authorizationHeader,
+          },
     }
   );
   return ensureObjectHasProperty({
@@ -658,8 +689,12 @@ export const createAiGeneratedEvent = async (
     relatedAiRequestId: string,
   |}
 ): Promise<CreateAiGeneratedEventResult> => {
-  const authorizationHeader = await getAuthorizationHeader();
-  const response = await apiClient.post(
+  const client = getApiClient();
+  const customConfig = getCustomAiApiConfig();
+  const authorizationHeader = customConfig.enabled
+    ? ''
+    : await getAuthorizationHeader();
+  const response = await client.post(
     `/ai-generated-event`,
     {
       gdevelopVersionWithHash: getIDEVersionWithHash(),
@@ -681,9 +716,11 @@ export const createAiGeneratedEvent = async (
       params: {
         userId,
       },
-      headers: {
-        Authorization: authorizationHeader,
-      },
+      headers: customConfig.enabled
+        ? {}
+        : {
+            Authorization: authorizationHeader,
+          },
       validateStatus: status => true,
     }
   );

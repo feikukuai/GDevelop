@@ -16,6 +16,7 @@ import { showErrorBox } from './UI/Messages/MessageBox';
 import VersionMetadata from './Version/VersionMetadata';
 import { loadPreferencesFromLocalStorage } from './MainFrame/Preferences/PreferencesProvider';
 import { getFullTheme } from './UI/Theme';
+import { setCustomAiApiConfig } from './Utils/GDevelopServices/ApiConfigs';
 
 const GD_STARTUP_TIMES = global.GD_STARTUP_TIMES || [];
 
@@ -80,6 +81,24 @@ class Bootstrapper extends Component<{}, State> {
   componentDidMount() {
     installAnalyticsEvents();
     GD_STARTUP_TIMES.push(['bootstrapperComponentDidMount', performance.now()]);
+
+    // Load custom AI configuration from localStorage
+    try {
+      const enabled = localStorage.getItem('gdevelop-custom-ai-enabled') === 'true';
+      const baseUrl = localStorage.getItem('gdevelop-custom-ai-baseurl');
+      const apiKey = localStorage.getItem('gdevelop-custom-ai-apikey');
+
+      if (enabled && baseUrl) {
+        setCustomAiApiConfig({
+          enabled: true,
+          baseUrl: baseUrl,
+          apiKey: apiKey,
+        });
+        console.log('✅ Custom AI API loaded:', baseUrl);
+      }
+    } catch (error) {
+      console.warn('Failed to load custom AI config:', error);
+    }
 
     // Load GDevelop.js, ensuring a new version is fetched when the version changes.
     loadScript(

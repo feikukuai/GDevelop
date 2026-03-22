@@ -18,6 +18,7 @@ import { type LearnCategory } from './LearnSection/Utils';
 import PlaySection from './PlaySection';
 import CreateSection from './CreateSection';
 import StoreSection from './StoreSection';
+import ApiSettingsSection from './ApiSettingsSection';
 import { TutorialContext } from '../../../Tutorial/TutorialContext';
 import { ExampleStoreContext } from '../../../AssetStore/ExampleStore/ExampleStoreContext';
 import { HomePageHeader } from './HomePageHeader';
@@ -697,6 +698,7 @@ export const HomePage: React.ComponentType<Props> = React.memo<Props>(
                       getCourseCompletion={getCourseCompletion}
                     />
                   )}
+                  {activeTab === 'api-settings' && <ApiSettingsSection />}
                   {activeTab === 'team-view' &&
                     (canUseClassroomFeature(limits) ? (
                       <TeamSection

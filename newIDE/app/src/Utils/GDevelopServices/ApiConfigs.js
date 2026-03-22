@@ -114,6 +114,23 @@ export const GDevelopGenerationApi = {
     : 'https://api.gdevelop.io/generation'): string),
 };
 
+// Custom AI API configuration (for third-party OpenAI compatible APIs)
+export let customAiApiConfig = {
+  baseUrl: null,
+  apiKey: null,
+  enabled: false,
+};
+
+export const setCustomAiApiConfig = (config: {|
+  baseUrl: ?string,
+  apiKey: ?string,
+  enabled: boolean,
+|}) => {
+  customAiApiConfig = { ...customAiApiConfig, ...config };
+};
+
+export const getCustomAiApiConfig = () => customAiApiConfig;
+
 export const GDevelopAiCdn = {
   baseUrl: {
     staging: 'https://public-resources.gdevelop.io/staging/ai',
