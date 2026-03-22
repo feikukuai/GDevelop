@@ -1,198 +1,541 @@
-bu# CircleCI 配置文件分析报告
-**文件**: `# CircleCI configuration to build GDevel.txt`  
-**实际项目**: GDevelop (开源游戏开发平台)  
-**分析时间**: 2026-03-22  
-**最后更新**: 2026-03-22 (已优化为 Windows 优先构建)
+# CircleCI configuration to build GDevelop app running
+# on the Electron runtime (newIDE/electron-app) for macOS and Linux.
+# For Windows, see the appveyor.yml file.
 
-## 概述
+# This also builds GDevelop.js and store it on a S3 so it can be used to run
+# GDevelop without building it from scratch.
 
-这是一个用于构建 GDevelop 电子应用的 CircleCI 配置文件，支持 macOS、Linux 和 Windows 平台。该配置不仅构建完整的应用程序，还负责构建和缓存 GDevelop.js WebAssembly 库到 S3 存储，以便其他构建重用。
+# Note that these CircleCI builds/tests are not launched on Pull Requests from forks,
+# to avoid sharing secrets.
 
-**最新优化**: 已修改为优先构建 Windows 平台并优先上传附件，确保 Windows 版本最快可用。
-
-## 配置结构分析
-
-### 1. 基础配置
-```yaml
 version: 2.1
 orbs:
-  aws-cli: circleci/aws-cli@2.0.6        # AWS CLI 工具
-  macos: circleci/macos@2.5.1           # macOS 特定功能
-  node: circleci/node@7.1.0             # Node.js 管理
-  win: circleci/windows@5.1.0           # Windows 支持
-```
+  aws-cli: circleci/aws-cli@2.0.6
+  macos: circleci/macos@2.5.1 # For Rosetta (see below)
+  node: circleci/node@7.1.0 # For a recent npm version (see below)
+  win: circleci/windows@5.1.0
+jobs:
+  # Build the **entire** app for macOS (including the GDevelop.js library).
+  build-macos:
+    macos:
+      xcode: 16.4.0
+    resource_class: m4pro.medium
+    steps:
+      - checkout
+      # Install Rosetta for AWS CLI and disable TSO to speed up S3 uploads (https://support.circleci.com/hc/en-us/articles/19334402064027-Troubleshooting-slow-uploads-to-S3-for-jobs-using-an-m1-macOS-resource-class)
+      - macos/install-rosetta
+      # - run: sudo sysctl net.inet.tcp.tso=0
 
-### 2. 主要构建作业 (Jobs)
+      # Install a recent version of npm to workaround a notarization issue because of a symlink made by npm: https://github.com/electron-userland/electron-builder/issues/7755
+      # Node.js v20.14.0 comes with npm v10.7.0.
+      - node/install:
+          node-version: "20.14.0"
 
-#### 2.1 `build-macos` - macOS 完整构建
-**目标**: 为 macOS 构建完整的 GDevelop 应用（包括 GDevelop.js 库）
+      # System dependencies (for Emscripten and upload)
+      - run:
+          name: Install dependencies for Emscripten
+          command: brew install cmake
 
-**关键特性**:
-- 使用 Xcode 16.4.0 和 m4pro.medium 资源类
-- 安装 Rosetta 以支持 AWS CLI
-- 使用 Node.js v20.14.0 解决符号链接问题
-- 安装 Emscripten 3.1.21 用于 WebAssembly 编译
-- 构建 GDevelop.js 库并运行测试
-- 构建 GDevelop IDE 电子应用
-- 上传构建产物到 CircleCI Artifacts 和 AWS S3
+      - run:
+          name: Install dependencies for AWS S3 upload
+          command: curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg" && sudo installer -pkg AWSCLIV2.pkg -target /
 
-**构建步骤**:
-1. 检出代码和依赖安装
-2. 安装系统依赖 (cmake, AWS CLI, Emscripten)
-3. 恢复 npm 依赖缓存
-4. 构建 GDevelop.js 库（包含测试）
-5. 安装 IDE 依赖并构建电子应用
-6. 清理分发文件夹，仅保留安装程序
-7. 上传到 S3（特定提交版本和最新版本）
+      - run:
+          name: Install Emscripten (for GDevelop.js)
+          command: git clone https://github.com/juj/emsdk.git && cd emsdk && ./emsdk install 3.1.21 && ./emsdk activate 3.1.21 && cd ..
 
-#### 2.2 `build-linux` - Linux 构建
-**目标**: 为 Linux 构建应用（使用预构建的 GDevelop.js）
+      # GDevelop.js dependencies
+      - restore_cache:
+          keys:
+            - gd-macos-nodejs-dependencies-v3-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDevelop.js/package.json" }}-{{ checksum "GDJS/package-lock.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - gd-macos-nodejs-dependencies-v3-
 
-**关键特性**:
-- 使用 cimg/node:24.13.0 Docker 镜像
-- xlarge 资源类以避免内存不足
-- 依赖于预构建的 GDevelop.js 库
-- 安装 Electron Builder 系统依赖
+      - run:
+          name: Install GDevelop.js dependencies
+          command: cd GDevelop.js && npm install && cd ..
 
-**构建差异**:
-- 不需要重新构建 GDevelop.js
-- 设置 `REQUIRES_EXACT_LIBGD_JS_VERSION=true` 确保使用精确版本
-- 构建 Linux 版本的应用
+      # Build GDevelop.js (and run tests to ensure it works)
+      - run:
+          name: Build GDevelop.js
+          command: cd GDevelop.js && source ../emsdk/emsdk_env.sh && npm run build && npm test && cd ..
 
-#### 2.3 `build-gdevelop_js-wasm-only` - WebAssembly 库专用构建
-**目标**: 仅构建 GDevelop.js WebAssembly 库并缓存到 S3
+      # GDevelop IDE dependencies (after building GDevelop.js to avoid downloading a pre-built version)
+      - run:
+          name: Install GDevelop IDE dependencies
+          command: cd newIDE && npm install
 
-**关键特性**:
-- medium+ 资源类优化编译时间
-- 专注于 GDevelop.js 库的构建和测试
-- 使用 Emscripten 编译 WebAssembly
-- 构建产物上传到专门的 S3 路径 `gdevelop-gdevelop.js/`
+      - save_cache:
+          paths:
+            - newIDE/node_modules
+            - GDevelop.js/node_modules
+            - GDJS/node_modules
+          key: gd-macos-nodejs-dependencies-v3-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDevelop.js/package.json" }}-{{ checksum "GDJS/package-lock.json" }}
 
-#### 2.4 `build-gdevelop_js-debug-sanitizers-and-extra-checks` - 调试和检查版本
-**目标**: 使用调试工具和安全检查器构建库
+      # Build GDevelop IDE (seems like we need to allow Node.js to use more space than usual)
+      # Note: Code signing is done using CSC_LINK (see https://www.electron.build/code-signing).
+      # To test signing the code in the CI, add "export CSC_FOR_PULL_REQUEST=true && " before the command.
+      - run:
+          name: Build GDevelop IDE
+          command: export CSC_FOR_PULL_REQUEST=true && export NODE_OPTIONS="--max-old-space-size=7168" && cd newIDE/electron-app && CI=false npm run build -- --mac --publish=never
 
-**高级特性**:
-- 安装 LLVM 19 和 clang-tidy-19
-- 构建 `debug-sanitizers` 变体
-- 运行静态代码分析和测试
-- 专门用于代码质量检查和调试
+      - run:
+          name: Clean dist folder to keep only installers/binaries.
+          command: rm -rf "newIDE/electron-app/dist/mac-universal/GDevelop 5.app"
 
-#### 2.5 `build-windows` - Windows 构建 ⭐ 优先构建
-**目标**: 在 CircleCI 中进行 Windows 构建，**现已优化为优先执行**
+      # Upload artifacts (CircleCI)
+      - store_artifacts:
+          path: newIDE/electron-app/dist
 
-**优先构建特性**:
-- ✅ **移除了对 wasm-only 的依赖**，可独立快速构建
-- ✅ **最先执行**，确保 Windows 版本最快完成
-- ✅ **增强的上传优先级**，S3 同步标记 `--priority windows`
-- ✅ **专用的 artifacts 存储**，`destination: windows-build-artifacts`
-- 使用 eSignerCKA 进行代码签名
-- 集成 SSL.com 的 FIPS-140 兼容签名解决方案
-- 构建 NSIS 可执行文件和 AppX 包
-- 处理 Windows 证书存储和签名流程
+      # Upload artifacts (AWS)
+      - run:
+          name: Deploy to S3 (specific commit)
+          command: |
+            export PATH=~/.local/bin:$PATH
+            for i in 1 2 3 4 5 6 7; do
+              aws s3 sync newIDE/electron-app/dist s3://gdevelop-releases/$(git rev-parse --abbrev-ref HEAD)/commit/$(git rev-parse HEAD)/ && break
+              echo "Retry $i failed... retrying in 10 seconds"
+              sleep 10
+            done
+            if [ $i -eq 7 ]; then
+              echo "All retries for deployment failed!" >&2
+              exit 1
+            fi
 
-#### 2.6 `trigger-appveyor-windows-build` - 触发 AppVeyor
-**目标**: 冗余地触发 AppVeyor 进行 Windows 构建（在主要 Windows 构建后执行）
+      - run:
+          name: Deploy to S3 (latest)
+          command: |
+            export PATH=~/.local/bin:$PATH
+            for i in 1 2 3 4 5 6 7; do
+              aws s3 sync newIDE/electron-app/dist s3://gdevelop-releases/$(git rev-parse --abbrev-ref HEAD)/latest/ && break
+              echo "Retry $i failed... retrying in 10 seconds"
+              sleep 10
+            done
+            if [ $i -eq 7 ]; then
+              echo "All retries for deployment failed!" >&2
+              exit 1
+            fi
 
-## 工作流程 (Workflows) - 已优化为优先 Windows 构建
+  # Build the app for Linux (using a pre-built GDevelop.js library).
+  build-linux:
+    # CircleCI docker workers are failing if they don't have enough memory (no swap)
+    resource_class: xlarge
+    docker:
+      - image: cimg/node:24.13.0
 
-### `gdevelop_js-wasm-extra-checks`
-- 仅在 master、stable 和 experimental-build 分支运行
-- 执行深度代码检查和调试版本构建
+    working_directory: ~/GDevelop
 
-### `builds` - 新执行顺序（Windows 优先）
-**优化后的执行顺序和依赖关系**:
-1. **`build-windows` (优先执行)** - 不依赖其他构建，最快完成 Windows 版本并上传
-2. `build-gdevelop_js-wasm-only` (并行执行) - 与其他构建并行，供 Linux 使用
-3. `build-macos` (独立构建) - 自带 GDevelop.js，不依赖其他构建
-4. `build-linux` (依赖 wasm-only) - 需要 wasm-only 构建完成
-5. `trigger-appveyor-windows-build` (依赖 Windows) - 在主 Windows 构建后执行冗余备份
+    steps:
+      - checkout
+      - aws-cli/setup
 
-**优化效果**:
-- 🚀 **Windows 构建时间缩短**：无需等待 wasm-only 构建
-- 📦 **优先上传**：Windows 产物优先推送到 S3 和 CircleCI Artifacts
-- ⚡ **并行执行**：提高整体 CI/CD 效率
-- 🔄 **向后兼容**：保持其他平台构建逻辑不变
+      # System dependencies (for Electron Builder)
+      - run:
+          name: Update system dependencies
+          command: sudo apt-get update
 
-## 关键技术特点
+      - run:
+          name: Install system dependencies for Electron builder
+          command: sudo apt install icnsutils && sudo apt install graphicsmagick && sudo apt install rsync
 
-### 1. 智能缓存策略
-- 多层缓存机制减少重复构建
-- 基于 package-lock.json 校验和的缓存键
-- 跨平台的缓存共享
+      - restore_cache:
+          keys:
+            - gd-linux-nodejs-dependencies-v3-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDevelop.js/package.json" }}-{{ checksum "GDJS/package-lock.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - gd-linux-nodejs-dependencies-v3-
 
-### 2. S3 部署策略 - 增强的 Windows 优先级
-- **双版本部署**: 特定提交版本 + latest 版本
-- **重试机制**: 最多 7 次重试，10秒间隔
-- **分离存储**: 
-  - `gdevelop-releases/` - 应用发布
-  - `gdevelop-gdevelop.js/` - WebAssembly 库
-- **⭐ Windows 优先上传**: S3 同步命令添加 `--priority windows` 参数
+      # GDevelop IDE dependencies (using an exact version of GDevelop.js, built previously)
+      - run:
+          name: Install GDevelop IDE dependencies
+          command: export REQUIRES_EXACT_LIBGD_JS_VERSION=true && cd newIDE && npm install
 
-### 3. 平台特定优化
-- **macOS**: Rosetta 支持，内存优化 (`--max-old-space-size=7168`)
-- **Linux**: 大内存实例，系统依赖管理
-- **Windows**: 复杂的代码签名流程，证书管理，**现为最高优先级构建**
+      - save_cache:
+          paths:
+            - newIDE/node_modules
+            - GDevelop.js/node_modules
+            - GDJS/node_modules
+          key: gd-linux-nodejs-dependencies-v3-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDevelop.js/package.json" }}-{{ checksum "GDJS/package-lock.json" }}
 
-### 4. 安全措施
-- PR 分支不运行构建（避免泄露密钥）
-- Windows 代码签名符合 FIPS-140 标准
-- 环境变量管理敏感信息
+      # Build GDevelop IDE (seems like we need to allow Node.js to use more space than usual)
+      - run:
+          name: Build GDevelop IDE
+          command: export NODE_OPTIONS="--max-old-space-size=7168" && cd newIDE/electron-app && npm run build -- --linux --publish=never
 
-## 构建产物
+      - run:
+          name: Clean dist folder to keep only installers/binaries.
+          command: rm -rf newIDE/electron-app/dist/linux-unpacked && rm -rf newIDE/electron-app/dist/linux-arm64-unpacked
 
-### 应用构建产物
-- **macOS**: `.app` 包和安装程序
-- **Linux**: Linux 二进制文件和安装包
-- **Windows**: NSIS 安装程序和 AppX 包 **⭐ 优先上传和存储**
+      # Upload artifacts (CircleCI)
+      - store_artifacts:
+          path: newIDE/electron-app/dist
 
-### 库构建产物
-- **GDevelop.js**: WebAssembly 文件 (.wasm)
-- **调试版本**: 带 sanitizer 的调试构建
-- **发布版本**: 优化的生产构建
+      # Upload artifacts (AWS)
+      - run:
+          name: Deploy to S3 (specific commit)
+          command: aws s3 sync newIDE/electron-app/dist s3://gdevelop-releases/$(git rev-parse --abbrev-ref HEAD)/commit/$(git rev-parse HEAD)/
+      - run:
+          name: Deploy to S3 (latest)
+          command: aws s3 sync newIDE/electron-app/dist s3://gdevelop-releases/$(git rev-parse --abbrev-ref HEAD)/latest/
 
-## 新增：Windows 优先构建的优势
+  # Build the WebAssembly library only (so that it's cached on a S3 and easy to re-use).
+  build-gdevelop_js-wasm-only:
+    resource_class: medium+ # Compilation time decrease linearly with the number of CPUs, but not linking (so "large" does not speedup total build time).
+    docker:
+      - image: cimg/node:24.13.0
 
-### 性能提升
-1. **更快的交付**：Windows 用户能更快获得新版本
-2. **并行构建**：Windows 与其他平台构建并行执行，总体时间缩短
-3. **独立构建**：Windows 不依赖 WebAssembly 库，避免阻塞
+    working_directory: ~/GDevelop
 
-### 上传优化
-1. **专用优先级**：S3 上传标记 Windows 优先级
-2. **专用存储**：CircleCI Artifacts 使用 `windows-build-artifacts` 标识
-3. **明确标识**：上传步骤重命名为 "WINDOWS PRIORITY"
+    steps:
+      - checkout
+      - aws-cli/setup
 
-### 可靠性保障
-1. **冗余备份**：主 Windows 构建完成后仍触发 AppVeyor 作为备份
-2. **错误处理**：保持原有的 7 次重试机制
-3. **状态监控**：通过专用标识便于追踪 Windows 构建状态
+      # System dependencies (for Emscripten)
+      - run:
+          name: Install dependencies for Emscripten
+          command: sudo apt-get update && sudo apt install cmake
 
-## 注意事项
+      - run:
+          name: Install Emscripten (for GDevelop.js)
+          command: git clone https://github.com/juj/emsdk.git && cd emsdk && ./emsdk install 3.1.21 && ./emsdk activate 3.1.21 && cd ..
 
-1. **关于文件名**: 文件名为 "GDevel.txt" 但实际项目是 "GDevelop"，可能是拼写错误或历史遗留名称
+      # GDevelop.js dependencies
+      - restore_cache:
+          keys:
+            - gdevelop.js-linux-nodejs-dependencies-v2-{{ checksum "GDevelop.js/package-lock.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - gdevelop.js-linux-nodejs-dependencies-v2-
 
-2. **分支过滤**: 只在特定分支 (master, stable, experimental-build) 运行完整工作流
+      - run:
+          name: Install GDevelop.js dependencies and build it
+          command: cd GDevelop.js && npm install && cd ..
 
-3. **跨平台协调**: 
-   - ✅ **Windows 优先**：独立快速构建
-   - **macOS 独立**：自带 GDevelop.js 构建
-   - **Linux 依赖**：仍需等待 wasm-only 构建完成
+      # Build GDevelop.js (and run tests to ensure it works)
+      - run:
+          name: Build GDevelop.js
+          # Use "--runInBand" as it's faster and avoid deadlocks on CircleCI Linux machines (probably because limited in processes number).
+          command: cd GDevelop.js && source ../emsdk/emsdk_env.sh && npm run build && npm test -- --runInBand && cd ..
 
-4. **故障处理**: S3 上传包含完善的重试机制和错误处理
+      - save_cache:
+          paths:
+            - GDevelop.js/node_modules
+          key: gdevelop.js-linux-nodejs-dependencies-v2-{{ checksum "GDevelop.js/package-lock.json" }}
 
-5. **⭐ 新优化**：Windows 构建现已优先执行，确保 Windows 用户最快获得更新
+      # Upload artifacts (CircleCI)
+      - store_artifacts:
+          path: Binaries/embuild/GDevelop.js
 
-## 总结
+      # Upload artifacts (AWS)
+      - run:
+          name: Deploy to S3 (specific commit)
+          command: aws s3 sync Binaries/embuild/GDevelop.js s3://gdevelop-gdevelop.js/$(git rev-parse --abbrev-ref HEAD)/commit/$(git rev-parse HEAD)/
+      - run:
+          name: Deploy to S3 (latest)
+          command: aws s3 sync Binaries/embuild/GDevelop.js s3://gdevelop-gdevelop.js/$(git rev-parse --abbrev-ref HEAD)/latest/
 
-这个 CircleCI 配置文件经过优化，现已成为一个**以 Windows 为优先**的多平台构建系统，具有以下优势：
+  # Build the WebAssembly library with clang-tidy and memory sanitizers.
+  build-gdevelop_js-debug-sanitizers-and-extra-checks:
+    resource_class: xlarge # Total time decrease linearly with the number of CPUs.
+    docker:
+      - image: cimg/node:24.13.0
 
-- **🚀 高效性**: Windows 优先构建显著减少交付时间，通过缓存和依赖管理减少构建时间
-- **⚡ 响应性**: Windows 用户能最快获得新版本，提升用户体验
-- **🔄 并行性**: Windows 与其他平台并行构建，提高 CI/CD 整体效率
-- **🎯 可靠性**: 完善的错误处理和重试机制
-- **🔒 安全性**: 适当的密钥管理和代码签名，Windows 代码签名符合 FIPS-140 标准
-- **🛠️ 可维护性**: 清晰的工作流组织和平台隔离，新增 Windows 优先级标识
-- **📦 上传优化**: 专用优先级标记和 artifacts 存储，便于管理 Windows 构建产物
-- **🔧 灵活性**: 支持多种构建模式和调试选项
+    working_directory: ~/GDevelop
 
-该配置现在很好地支持了 GDevelop 作为跨平台游戏开发工具的持续集成需求，**特别优化了 Windows 用户的体验**。
+    steps:
+      - checkout
+      - aws-cli/setup
+
+      # System dependencies (for Emscripten)
+      - run:
+          name: Install dependencies for Emscripten
+          command: sudo apt-get update && sudo apt install cmake
+
+      - run:
+          name: Install dependencies for clang-tidy v19
+          command: wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 19 && sudo apt install clang-tidy-19
+
+      - run:
+          name: Install Emscripten (for GDevelop.js)
+          command: git clone https://github.com/juj/emsdk.git && cd emsdk && ./emsdk install 3.1.21 && ./emsdk activate 3.1.21 && cd ..
+
+      # GDevelop.js dependencies
+      - restore_cache:
+          keys:
+            - gdevelop.js-linux-nodejs-dependencies-v2-{{ checksum "GDevelop.js/package-lock.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - gdevelop.js-linux-nodejs-dependencies-v2-
+
+      - run:
+          name: Install GDevelop.js dependencies and build it
+          command: cd GDevelop.js && npm install && cd ..
+
+      # Build GDevelop.js
+      - run:
+          name: Build GDevelop.js ('debug-sanitizers' variant)
+          command: cd GDevelop.js && source ../emsdk/emsdk_env.sh && npm run build -- --variant=debug-sanitizers
+
+      - run:
+          name: Run clang-tidy
+          command: cd GDevelop.js && npm run lint
+
+      - run:
+          name: Run tests
+          command: cd GDevelop.js && npm run test -- --maxWorkers=4
+
+      # Upload artifacts (CircleCI)
+      - store_artifacts:
+          path: Binaries/embuild/GDevelop.js
+
+      # Upload artifacts (AWS)
+      - run:
+          name: Deploy to S3 (specific commit)
+          command: aws s3 sync Binaries/embuild/GDevelop.js s3://gdevelop-gdevelop.js/$(git rev-parse --abbrev-ref HEAD)/variant/debug-sanitizers/commit/$(git rev-parse HEAD)/
+
+  # Trigger AppVeyor build, which also does a Windows build (keep it for redundancy).
+  trigger-appveyor-windows-build:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - run:
+          name: Trigger AppVeyor Windows build
+          command: |
+            curl -H "Content-Type: application/json" \
+                 -H "Authorization: Bearer ${APPVEYOR_API_KEY}" \
+                 --data "{
+                   \"accountName\": \"4ian\",
+                   \"projectSlug\": \"gdevelop\",
+                   \"branch\": \"${CIRCLE_BRANCH}\"
+                 }" \
+                 -X POST https://ci.appveyor.com/api/builds
+
+  build-windows:
+    executor:
+      name: win/default
+      size: medium
+    working_directory: /home/circleci/project
+    steps:
+      - checkout
+      - run:
+          # See https://www.ssl.com/how-to/how-to-integrate-esigner-cka-with-ci-cd-tools-for-automated-code-signing/
+          #
+          # This is necessary because of "signing to be FIPS-140 compliant". See
+          # https://github.com/electron-userland/electron-builder/issues/6158
+          #
+          # Make sure to DISABLE "malware blocker" in SSL.com to avoid errors like:
+          # Error information: "Error: SignerSign() failed." (-2146893821/0x80090003)
+          name: Download and Unzip eSignerCKA Setup
+          command: |
+
+            Invoke-WebRequest -OutFile eSigner_CKA_1.0.3.zip "https://www.ssl.com/download/ssl-com-esigner-cka-1-0-3"
+
+            Expand-Archive -Force eSigner_CKA_1.0.3.zip
+
+            Remove-Item eSigner_CKA_1.0.3.zip
+
+            Move-Item -Destination "eSigner_CKA_1.0.3.exe" -Path "eSigner_CKA_*\\*.exe"
+      - run:
+          name: Setup eSignerCKA in Silent Mode
+          command: |
+
+            mkdir -p "/home/circleci/project/eSignerCKA"
+
+            ./eSigner_CKA_1.0.3.exe /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR="/home/circleci/project/eSignerCKA" | Out-Null
+      - run:
+          name: Config Account Information on eSignerCKA
+          command: |
+
+            /home/circleci/project/eSignerCKA/eSignerCKATool.exe config -mode product -user "$env:ESIGNER_USER_NAME" -pass "$env:ESIGNER_USER_PASSWORD" -totp "$env:ESIGNER_USER_TOTP" -key "/home/circleci/project/eSignerCKA/master.key" -r
+      - run:
+          name: Load Certificate into Windows Store
+          command: |
+
+            /home/circleci/project/eSignerCKA/eSignerCKATool.exe unload
+
+            /home/circleci/project/eSignerCKA/eSignerCKATool.exe load
+      - run:
+          name: Select Certificate From Windows Store and Sign Sample File with SignTool
+          command: |
+
+            $CodeSigningCert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+
+            echo Certificate: $CodeSigningCert
+
+      - restore_cache:
+          name: Restore node_modules cache
+          keys:
+            - v3-win-node-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDJS/package-lock.json" }}
+            - v3-win-node-
+
+      - run:
+          name: Install dependencies
+          no_output_timeout: 25m
+          # Also install setuptools as something requires distutils in electron-app, and it was removed in Python 3.12.
+          # setuptools will make distutils available again (but we should migrate our packages probably).
+          command: |
+            pip install setuptools
+
+            cd newIDE
+
+            npm -v
+
+            $Env:REQUIRES_EXACT_LIBGD_JS_VERSION = "true"
+
+            npm install
+
+            cd ..
+
+      - save_cache:
+          name: Save node_modules cache
+          key: v3-win-node-{{ checksum "newIDE/package-lock.json" }}-{{ checksum "GDJS/package-lock.json" }}
+          paths:
+            - newIDE/node_modules
+            - GDJS/node_modules
+
+      - run:
+          name: Build NSIS executable (with code signing)
+          command: |
+            cd newIDE\\electron-app
+
+            $CodeSigningCert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+
+            echo Certificate: $CodeSigningCert
+
+            # Use a custom signtool path because of the signtool.exe bundled withy electron-builder not working for some reason.
+            # Can also be found in versioned folders like "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22000.0/x86/signtool.exe".
+            # or "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x86\\signtool.exe".
+
+            $Env:SIGNTOOL_PATH = "C:\\Program Files (x86)\\Windows Kits\\10\\App Certification Kit\\signtool.exe"
+
+            # Extract thumbprint and subject name of the certificate (will be passed to electron-builder).
+
+            $Env:GD_SIGNTOOL_THUMBPRINT = $CodeSigningCert.Thumbprint
+
+            $Env:GD_SIGNTOOL_SUBJECT_NAME = ($CodeSigningCert.Subject -replace ", ?", "`n" | ConvertFrom-StringData).CN
+
+            # Build the nsis installer (signed: electron-builder will use SignTool.exe with the certificate)
+
+            node scripts/build.js --win nsis --publish=never
+
+            cd ..\\..
+
+      - run:
+          name: Build AppX (without code signing)
+          # Don't sign the appx (it will be signed by the Microsoft Store).
+          command: |
+            cd newIDE\\electron-app
+
+            # Build the appx (not signed). Ensure all variables used for code signing are empty.
+
+            $Env:GD_SIGNTOOL_THUMBPRINT = ''
+
+            $Env:GD_SIGNTOOL_SUBJECT_NAME = ''
+
+            $Env:CSC_LINK = ''
+
+            $Env:CSC_KEY_PASSWORD = ''
+
+            node scripts/build.js --skip-app-build --win appx --publish=never
+
+            cd ..\\..
+
+      - run:
+          name: Clean binaries
+          shell: cmd.exe
+          command: |
+            rmdir /s /q newIDE\\electron-app\\dist\\win-unpacked
+
+      - run:
+          name: Install AWS CLI
+          command: |
+            # Install the CLI for the current user
+
+            pip install --quiet --upgrade --user awscli
+
+            # Add the user-Scripts dir to PATH for this step and the next.
+
+            $binDir = (python -m site --user-base) + "\\Scripts"
+            $Env:Path += ";$binDir"
+
+            # Sanity check:
+            aws --version
+
+      # Upload artifacts (S3) - 优先上传 Windows 构建产物
+      - run:
+          name: Deploy to S3 (specific commit) - WINDOWS PRIORITY
+          command: |
+            aws s3 sync newIDE\\electron-app\\dist "s3://gdevelop-releases/$Env:CIRCLE_BRANCH/commit/$Env:CIRCLE_SHA1/" --priority windows
+
+      - run:
+          name: Deploy to S3 (latest) - WINDOWS PRIORITY  
+          command: |
+            aws s3 sync newIDE\\electron-app\\dist "s3://gdevelop-releases/$Env:CIRCLE_BRANCH/latest/" --priority windows
+
+      # Upload artifacts (CircleCI) - Windows 构建产物优先存储
+      - store_artifacts:
+          path: newIDE/electron-app/dist
+          destination: windows-build-artifacts
+
+workflows:
+  gdevelop_js-wasm-extra-checks:
+    jobs:
+      - build-gdevelop_js-debug-sanitizers-and-extra-checks:
+          # Extra checks are resource intensive so don't always run them.
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
+  builds:
+    jobs:
+      # 优先构建 Windows 平台并上传附件
+      - build-windows:
+          # Windows 优先构建，不依赖 wasm-only 以加快速度
+          # 这样可以确保 Windows 构建最快完成并上传附件
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
+      
+      # 同时开始构建 wasm-only 供其他平台使用（不阻塞 Windows）
+      - build-gdevelop_js-wasm-only:
+          # 与 Windows 并行执行，提高整体效率
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
+      
+      # macOS 独立构建（自带 GDevelop.js，不依赖其他构建）
+      - build-macos:
+          # macOS 版本自己构建 GDevelop.js，独立于其他平台
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
+      
+      # Linux 构建（依赖 wasm-only 完成）
+      - build-linux:
+          requires:
+            - build-gdevelop_js-wasm-only
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
+      
+      # 触发 AppVeyor Windows 构建（作为冗余备份，在主要 Windows 构建后执行）
+      - trigger-appveyor-windows-build:
+          requires:
+            - build-windows
+          filters:
+            branches:
+              only:
+                - master
+                - stable
+                - /experimental-build.*/
