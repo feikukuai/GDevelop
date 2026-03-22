@@ -64,6 +64,13 @@
     <!-- Custom AI Configuration -->
     <script src="%PUBLIC_URL%/custom-ai-config.js"></script>
 
+    <!-- Increase chunk loading timeout for remote access -->
+    <script>
+      // Override webpack's default chunk loading timeout (default is 120000ms = 2 minutes)
+      // Increase to 5 minutes to handle slow remote connections
+      window.__webpack_chunk_timeout__ = 300000;
+    </script>
+
     <script>
       window["GD_STARTUP_TIMES"] = [["indexHtmlFirstScriptStarted", performance.now()]];
     </script>

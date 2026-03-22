@@ -119,12 +119,14 @@ export let customAiApiConfig = {
   baseUrl: null,
   apiKey: null,
   enabled: false,
+  modelName: 'gpt-3.5-turbo',
 };
 
 export const setCustomAiApiConfig = (config: {|
   baseUrl: ?string,
   apiKey: ?string,
   enabled: boolean,
+  modelName?: string,
 |}) => {
   customAiApiConfig = { ...customAiApiConfig, ...config };
 };

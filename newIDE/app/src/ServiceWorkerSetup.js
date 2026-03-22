@@ -27,6 +27,12 @@ export function registerServiceWorker() {
     return;
   }
 
+  // Disable Service Worker in development mode to avoid resource loading issues
+  if (isDev) {
+    console.log('[ServiceWorker] Service Worker disabled in development mode');
+    return;
+  }
+
   window.addEventListener('load', () => {
     // Use a cache-buster for development so that the service worker is
     // always reloaded when the app is reloaded.

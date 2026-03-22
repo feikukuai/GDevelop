@@ -82,6 +82,11 @@ class Bootstrapper extends Component<{}, State> {
     installAnalyticsEvents();
     GD_STARTUP_TIMES.push(['bootstrapperComponentDidMount', performance.now()]);
 
+    // 显示初始加载提示
+    this.setState({
+      loadingMessage: 'Initializing GDevelop...',
+    });
+
     // Load custom AI configuration from localStorage
     try {
       const enabled = localStorage.getItem('gdevelop-custom-ai-enabled') === 'true';
@@ -101,6 +106,10 @@ class Bootstrapper extends Component<{}, State> {
     }
 
     // Load GDevelop.js, ensuring a new version is fetched when the version changes.
+    this.setState({
+      loadingMessage: 'Loading game engine...',
+    });
+
     loadScript(
       `./libGD.js?cache-buster=${VersionMetadata.versionWithHash}`
     ).then(() => {
@@ -112,6 +121,10 @@ class Bootstrapper extends Component<{}, State> {
         );
         return;
       }
+
+      this.setState({
+        loadingMessage: 'Initializing WASM...',
+      });
 
       initializeGDevelopJs({
         // Override the resolved URL for the .wasm file,
@@ -132,24 +145,52 @@ class Bootstrapper extends Component<{}, State> {
         ]);
         sendProgramOpening();
 
+        this.setState({
+          loadingMessage: 'Loading editor...',
+        });
+
+        // 使用动态导入，确保只在对应环境中加载对应的 App
+        // 添加重试机制来处理 ChunkLoadError
+        const loadAppWithRetry = (importFn, retries = 5, delay = 5000) => {
+          return importFn()
+            .then(module => {
+              this.setState({
+                App: module.create(this.authentication),
+                loadingMessage: '',
+              });
+            })
+            .catch(error => {
+              console.warn(`Failed to load app (attempts left: ${retries}):`, error);
+
+              if (error.name === 'ChunkLoadError' && retries > 0) {
+                this.setState({
+                  loadingMessage: `Loading editor... Retrying (${6 - retries}/5). Please wait...`,
+                });
+                // Wait longer before retrying (increased from 2s to 5s)
+                return new Promise(resolve => {
+                  setTimeout(() => {
+                    resolve(loadAppWithRetry(importFn, retries - 1, delay));
+                  }, delay);
+                });
+              }
+
+              // If it's not a ChunkLoadError or we've exhausted retries
+              this.handleEditorLoadError(error);
+            });
+        };
+
         if (electron) {
-          import(/* webpackChunkName: "local-app" */ './LocalApp')
-            .then(module =>
-              this.setState({
-                App: module.create(this.authentication),
-                loadingMessage: '',
-              })
-            )
-            .catch(this.handleEditorLoadError);
+          loadAppWithRetry(
+            () => import(/* webpackChunkName: "local-app" */ './LocalApp'),
+            5,
+            5000
+          );
         } else {
-          import(/* webpackChunkName: "browser-app" */ './BrowserApp')
-            .then(module =>
-              this.setState({
-                App: module.create(this.authentication),
-                loadingMessage: '',
-              })
-            )
-            .catch(this.handleEditorLoadError);
+          loadAppWithRetry(
+            () => import(/* webpackChunkName: "browser-app" */ './BrowserApp'),
+            5,
+            5000
+          );
         }
       });
     }, this.handleEditorLoadError);
