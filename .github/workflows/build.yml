@@ -76,11 +76,10 @@ jobs:
           path: Binaries/embuild/GDevelop.js
           retention-days: 7
 
-  # Build for Windows
+  # Build for Windows (独立构建，不依赖其他 jobs)
   build-windows:
     name: Build Windows
     runs-on: windows-latest
-    needs: build-gdevelop-js
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -112,18 +111,39 @@ jobs:
           restore-keys: |
             windows-
 
-      - name: Download GDevelop.js artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: gdevelop-js-binaries
-          path: Binaries/embuild/GDevelop.js
+      - name: Install GDevelop.js dependencies
+        run: |
+          cd GDevelop.js
+          npm install
 
-      - name: Install dependencies
+      - name: Build GDevelop.js on Windows
+        run: |
+          cd GDevelop.js
+          npm run build
+
+      - name: Verify GDevelop.js build
+        run: |
+          if (!(Test-Path "Binaries/embuild/GDevelop.js")) {
+            Write-Error "GDevelop.js build failed!"
+            exit 1
+          }
+          Write-Host "GDevelop.js built successfully"
+
+      - name: Install IDE dependencies
         env:
           REQUIRES_EXACT_LIBGD_JS_VERSION: true
         run: |
           cd newIDE
           npm install
+          npm run import-resources
+
+      - name: Verify libGD.js exists
+        run: |
+          if (!(Test-Path "newIDE/app/public/libGD.js")) {
+            Write-Error "libGD.js not found after import-resources!"
+            exit 1
+          }
+          Write-Host "libGD.js exists successfully"
 
       - name: Build Windows NSIS installer
         env:
@@ -318,12 +338,21 @@ jobs:
           name: gdevelop-js-binaries
           path: Binaries/embuild/GDevelop.js
 
+      - name: Verify GDevelop.js download
+        run: |
+          if [ ! -d "Binaries/embuild/GDevelop.js" ]; then
+            echo "Error: GDevelop.js binaries not found!"
+            exit 1
+          fi
+          echo "GDevelop.js binaries downloaded successfully"
+
       - name: Install dependencies
         env:
           REQUIRES_EXACT_LIBGD_JS_VERSION: true
         run: |
           cd newIDE
           npm install
+          npm run import-resources
 
       - name: Build Linux app
         env:
