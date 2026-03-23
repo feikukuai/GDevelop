@@ -16,7 +16,7 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
-  # Build GDevelop.js WebAssembly library
+  # Build GDevelop.js WebAssembly library (for Linux and macOS)
   build-gdevelop-js:
     name: Build GDevelop.js (WebAssembly)
     runs-on: ubuntu-latest
@@ -76,10 +76,11 @@ jobs:
           path: Binaries/embuild/GDevelop.js
           retention-days: 7
 
-  # Build for Windows (独立构建，不依赖其他 jobs)
+  # Build for Windows (使用预编译的 GDevelop.js)
   build-windows:
     name: Build Windows
     runs-on: windows-latest
+    needs: build-gdevelop-js
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -111,23 +112,19 @@ jobs:
           restore-keys: |
             windows-
 
-      - name: Install GDevelop.js dependencies
-        run: |
-          cd GDevelop.js
-          npm install
+      - name: Download GDevelop.js artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gdevelop-js-binaries
+          path: Binaries/embuild/GDevelop.js
 
-      - name: Build GDevelop.js on Windows
-        run: |
-          cd GDevelop.js
-          npm run build
-
-      - name: Verify GDevelop.js build
+      - name: Verify GDevelop.js download
         run: |
           if (!(Test-Path "Binaries/embuild/GDevelop.js")) {
-            Write-Error "GDevelop.js build failed!"
+            Write-Error "GDevelop.js binaries not found!"
             exit 1
           }
-          Write-Host "GDevelop.js built successfully"
+          Write-Host "GDevelop.js binaries downloaded successfully"
 
       - name: Install IDE dependencies
         env:
