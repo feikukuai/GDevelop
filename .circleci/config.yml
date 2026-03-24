@@ -1,12 +1,3 @@
-# CircleCI configuration to build GDevelop app running
-# on the Electron runtime (newIDE/electron-app) for macOS and Linux.
-# For Windows, see the appveyor.yml file.
-
-# This also builds GDevelop.js and store it on a S3 so it can be used to run
-# GDevelop without building it from scratch.
-
-# Note that these CircleCI builds/tests are not launched on Pull Requests from forks,
-# to avoid sharing secrets.
 
 version: 2.1
 orbs:
@@ -14,7 +5,7 @@ orbs:
   macos: circleci/macos@2.5.1 # For Rosetta (see below)
   node: circleci/node@7.1.0 # For a recent npm version (see below)
   win: circleci/windows@5.1.0
-jobs:
+#jobs:
   # Build the **entire** app for macOS (including the GDevelop.js library).
   build-macos:
     macos:
