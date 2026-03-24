@@ -2,9 +2,7 @@ name: 定时访问 feihukuai
 
 on:
   schedule:
-    # 北京时间 00:00 (UTC 16:00)
     - cron: '0 16 * * *'
-    # 北京时间 06:00 (UTC 22:00)
     - cron: '0 22 * * *'
   workflow_dispatch:
 
@@ -14,5 +12,5 @@ jobs:
     steps:
       - name: 访问目标网址
         run: |
-          curl -sL "https://feihukuai.lovestoblog.com/" -o /dev/null
+          curl -sL -A "Mozilla/5.0" "https://feihukuai.lovestoblog.com/" -o /dev/null
           echo "访问完成"
